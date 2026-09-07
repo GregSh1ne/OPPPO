@@ -2,7 +2,9 @@ from dataclasses import asdict, dataclass
 import json
 import os
 
-DATA_FILE = "Vvodnya/library_catalog.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(SCRIPT_DIR, "library_catalog.json")
+
 
 @dataclass
 class Book:
@@ -11,25 +13,43 @@ class Book:
     genre: str
     copies: int
 
+
+def normalize(text: str) -> str:
+    """Удаляет лишние пробелы по краям и приводит строку к нижнему регистру."""
+    return text.strip().lower()
+
+
+def find_book(catalog: list[Book], title: str, author: str) -> Book | None:
+    """Ищет книгу в каталоге по названию и автору без учёта регистра."""
+    target_title = normalize(title)
+    target_author = normalize(author)
+
+    for book in catalog:
+        if (
+            normalize(book.title) == target_title
+            and normalize(book.author) == target_author
+        ):
+            return book
+    return None
+
+
 def save_catalog_to_file(
     catalog: list[Book], filename: str = DATA_FILE
 ) -> bool:
-    """Сохраняет текущий каталог книг в файл."""
+    """Сохраняет текущий каталог книг в JSON-файл."""
     try:
         data = [asdict(book) for book in catalog]
         with open(filename, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=4)
-        print(f"[✓] Каталог успешно сохранён в файл '{filename}'.")
+        print(f"Каталог успешно сохранён в файл '{filename}'.")
         return True
-    except OSError as e:
-        print(f"[!] Ошибка при записи в файл '{filename}': {e}")
+    except OSError as error:
+        print(f"Ошибка при записи в файл '{filename}': {error}")
         return False
 
-def load_catalog_from_file(filename: str = DATA_FILE) -> list[Book]:
-    """Загружает список книг из файла отдельной функцией.
 
-    Если файл не найден или повреждён — возвращает пустой список.
-    """
+def load_catalog_from_file(filename: str = DATA_FILE) -> list[Book]:
+    """Загружает список книг из JSON-файла с объединением дубликатов."""
     if not os.path.exists(filename):
         return []
 
@@ -39,21 +59,27 @@ def load_catalog_from_file(filename: str = DATA_FILE) -> list[Book]:
 
         loaded_catalog: list[Book] = []
         for item in raw_data:
-            loaded_catalog.append(
-                Book(
-                    title=str(item.get("title", "")),
-                    author=str(item.get("author", "")),
-                    genre=str(item.get("genre", "")),
-                    copies=int(item.get("copies", 0)),
+            title = str(item.get("title", "")).strip()
+            author = str(item.get("author", "")).strip()
+            genre = str(item.get("genre", "")).strip()
+            copies = int(item.get("copies", 0))
+
+            existing = find_book(loaded_catalog, title, author)
+            if existing:
+                existing.copies += copies
+            else:
+                loaded_catalog.append(
+                    Book(title=title, author=author, genre=genre, copies=copies)
                 )
-            )
+
         return loaded_catalog
-    except (json.JSONDecodeError, OSError, ValueError) as e:
-        print(f"[!] Ошибка чтения файла '{filename}': {e}")
+    except (json.JSONDecodeError, OSError, ValueError) as error:
+        print(f"Ошибка чтения файла '{filename}': {error}")
         return []
 
+
 def get_non_negative_int(prompt: str) -> int:
-    """Запрашивает у пользователя целое неотрицательное число."""
+    """Запрашивает целое неотрицательное число."""
     while True:
         raw_input = input(prompt).strip()
         try:
@@ -76,75 +102,85 @@ def get_non_empty_str(prompt: str) -> str:
             return value
         print("Ошибка: поле не может быть пустым.")
 
+
 def display_catalog(catalog: list[Book]):
     """Выводит список книг и общее количество экземпляров."""
     if not catalog:
-        print("\n" + "=" * 55)
-        print("Каталог пуст (введено 0 книг).")
+        print("\nКаталог пуст (введено 0 книг).")
         print("Общее количество книг в библиотеке: 0")
-        print("=" * 55)
         return
 
     total_copies = sum(book.copies for book in catalog)
 
-    print("\n" + "=" * 55)
-    print("СПИСОК ВСЕХ КНИГ В КАТАЛОГЕ")
-    print("=" * 55)
+    print("\nСПИСОК ВСЕХ КНИГ В КАТАЛОГЕ:")
     for idx, book in enumerate(catalog, start=1):
         print(
             f"{idx}. «{book.title}» | Автор: {book.author} | Жанр: {book.genre} | Экземпляров: {book.copies}"
         )
 
-    print("-" * 55)
-    print(f"Всего наименований (N): {len(catalog)}")
+    print(f"\nВсего уникальных наименований (N): {len(catalog)}")
     print(f"Общее количество экземпляров в библиотеке: {total_copies}")
-    print("=" * 55)
 
-def manual_input() -> list[Book]:
-    """Ручной ввод N книг пользователем."""
+
+def add_books_to_catalog(catalog: list[Book]):
+    """Организует ввод N книг и объединяет совпадения с существующими."""
     n = get_non_negative_int(
         "\nВведите количество наименований книг для добавления (N): "
     )
     if n == 0:
-        print("Введено N = 0. Новые книги не были добавлены.")
-        return []
+        print("Введено N = 0. Каталог оставлен без изменений.")
+        return
 
-    new_books: list[Book] = []
+    added_new = 0
+    merged_existing = 0
+
     for i in range(1, n + 1):
-        print(f"\n--- Ввод данных для книги #{i} ---")
+        print(f"\nВвод данных для книги {i} из {n}:")
         title = get_non_empty_str("Название книги: ")
         author = get_non_empty_str("Автор: ")
         genre = get_non_empty_str("Жанр: ")
         copies = get_non_negative_int("Количество экземпляров: ")
-        new_books.append(
-            Book(title=title, author=author, genre=genre, copies=copies)
-        )
 
-    return new_books
+        existing_book = find_book(catalog, title, author)
+        if existing_book:
+            existing_book.copies += copies
+            merged_existing += 1
+            print(
+                f"Книга «{existing_book.title}» ({existing_book.author}) уже есть в каталоге. "
+                f"Экземпляры объединены: +{copies} (всего: {existing_book.copies})."
+            )
+        else:
+            catalog.append(
+                Book(title=title, author=author, genre=genre, copies=copies)
+            )
+            added_new += 1
+            print(f"Книга «{title}» успешно добавлена в каталог.")
+
+    print(
+        f"\nИтог добавления: новых наименований — {added_new}, обновлено существующих — {merged_existing}."
+    )
+
 
 def main():
-    # Автоматическая загрузка из файла при старте
     catalog: list[Book] = load_catalog_from_file(DATA_FILE)
 
-    print("=== Управление библиотечным каталогом ===")
+    print("Управление библиотечным каталогом")
     if catalog:
         print(
-            f"[i] Из файла '{DATA_FILE}' автоматически загружено книг: {len(catalog)}"
+            f"Файл '{DATA_FILE}' найден: автоматически загружено {len(catalog)} наименований."
         )
     else:
         print(
-            f"[i] Файл '{DATA_FILE}' не найден или пуст. Каталог инициализирован с 0 книг."
+            f"Файл данных не найден или пуст. Каталог инициализирован с 0 книг."
         )
 
     while True:
-        print("\n" + "#" * 45)
-        print(" МЕНЮ ПРИЛОЖЕНИЯ")
-        print("#" * 45)
+        print("\nМеню приложения:")
         print("1 — Показать текущий каталог и общее количество")
-        print("2 — Добавить новые книги вручную (N книг)")
+        print("2 — Добавить книги (N наименований)")
         print("3 — Сохранить каталог в файл")
         print("4 — Перезагрузить каталог из файла")
-        print("5 — Очистить каталог (проверка крайнего случая: 0 книг)")
+        print("5 — Очистить каталог (крайний случай: 0 книг)")
         print("0 — Выйти из приложения")
 
         choice = input("\nВыберите действие (0-5): ").strip()
@@ -153,27 +189,20 @@ def main():
             display_catalog(catalog)
 
         elif choice == "2":
-            new_books = manual_input()
-            if new_books:
-                catalog.extend(new_books)
-                print(f"\n Успешно добавлено наименований: {len(new_books)}.")
+            add_books_to_catalog(catalog)
             display_catalog(catalog)
 
         elif choice == "3":
             save_catalog_to_file(catalog, DATA_FILE)
 
         elif choice == "4":
-            loaded = load_catalog_from_file(DATA_FILE)
-            if loaded:
-                catalog = loaded
-                print(f"\n[✓] Каталог успешно перезагружен из файла '{DATA_FILE}'!")
-            else:
-                print(f"\n[!] Файл '{DATA_FILE}' пуст или отсутствует.")
+            catalog = load_catalog_from_file(DATA_FILE)
+            print(f"Каталог перезагружен. Текущих записей: {len(catalog)}.")
             display_catalog(catalog)
 
         elif choice == "5":
             catalog.clear()
-            print("\n[✓] Каталог в памяти очищен.")
+            print("Каталог в оперативной памяти очищен.")
             display_catalog(catalog)
 
         elif choice == "0":
@@ -184,11 +213,12 @@ def main():
             )
             if save_prompt in ("y", "yes", "д", "да"):
                 save_catalog_to_file(catalog, DATA_FILE)
-            print("\nРабота завершена. До свидания!")
+            print("Работа завершена.")
             break
 
         else:
-            print("\n[!] Некорректный ввод. Выберите цифру от 0 до 5.")
+            print("Некорректный ввод. Введите число от 0 до 5.")
+
 
 if __name__ == "__main__":
     main()
