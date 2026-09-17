@@ -1,0 +1,9 @@
+PRINT
+REM duration > 5:00
+ADD SONG "Invalid Time Track" 3:75 "Unknown Artist"
+ADD SYMPHONY "Correct Track" 12:45 "Pyotr Tchaikovsky"
+PRINT
+REM composer == "Johann Bach"
+PRINT
+REM duration <= 15:00
+PRINT
