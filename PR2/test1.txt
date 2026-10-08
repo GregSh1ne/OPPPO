@@ -1,0 +1,12 @@
+ADD SONG "Bohemian Rhapsody" 5:55 "Queen"
+ADD SONG "Yesterday" 2:05 "The Beatles"
+ADD SYMPHONY "Symphony No. 5" 33:20 "Ludwig van Beethoven"
+ADD SONG "Shape of You" 3:53 "Ed Sheeran"
+ADD SYMPHONY "Symphony No. 40" 28:30 "Wolfgang Amadeus Mozart"
+PRINT
+REM duration > 10:00
+PRINT
+REM artist == "The Beatles"
+PRINT
+REM type == SONG
+PRINT
