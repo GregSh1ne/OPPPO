@@ -2,278 +2,306 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-using namespace std;
+namespace Config {
+    constexpr int SECONDS_PER_MINUTE = 60;
+    constexpr double SECONDS_PER_MINUTE_DOUBLE = 60.0;
+    constexpr double TIME_EPSILON = 1.0 / 60.0;
 
-// Приведение строки к нижнему регистру
-string toLower(string s) {
-    transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-        return static_cast<char>(tolower(c));
-    });
-    return s;
+    constexpr int COLUMN_TYPE_WIDTH = 12;
+    constexpr int COLUMN_TITLE_WIDTH = 24;
+    constexpr int COLUMN_TIME_WIDTH = 6;
 }
 
-// Парсинг времени
-bool parseDuration(const string& str, double& outMinutes) {
-    auto colonPos = str.find(':');
-    if (colonPos != string::npos) {
-        try {
-            int mins = stoi(str.substr(0, colonPos));
-            int secs = stoi(str.substr(colonPos + 1));
+auto toLower(std::string_view sourceText) -> std::string {
+    std::string loweredText(sourceText);
+    std::transform(loweredText.begin(), loweredText.end(), loweredText.begin(), [](unsigned char character) -> char {
+        return static_cast<char>(std::tolower(character));
+    });
+    return loweredText;
+}
 
-            if (mins < 0 || secs < 0 || secs >= 60) {
-                return false; // Ошибка: секунды не могут быть 60 и более
+auto parseDuration(const std::string& durationString, double& outMinutes) -> bool {
+    const auto colonPos = durationString.find(':');
+    if (colonPos != std::string::npos) {
+        try {
+            const int parsedMinutes = std::stoi(durationString.substr(0, colonPos));
+            const int parsedSeconds = std::stoi(durationString.substr(colonPos + 1));
+
+            if (parsedMinutes < 0 || parsedSeconds < 0 || parsedSeconds >= Config::SECONDS_PER_MINUTE) {
+                return false;
             }
 
-            outMinutes = mins + static_cast<double>(secs) / 60.0;
+            outMinutes = parsedMinutes + (static_cast<double>(parsedSeconds) / Config::SECONDS_PER_MINUTE_DOUBLE);
             return true;
         } catch (...) {
             return false;
         }
-    } else {
-        try {
-            outMinutes = stod(str);
-            return outMinutes >= 0.0;
-        } catch (...) {
-            return false;
-        }
+    }
+
+    try {
+        outMinutes = std::stod(durationString);
+        return outMinutes >= 0.0;
+    } catch (...) {
+        return false;
     }
 }
 
-// Форматирование длительности в "М:СС"
-string formatDuration(double durationInMinutes) {
-    int totalSeconds = static_cast<int>(round(durationInMinutes * 60.0));
-    int mins = totalSeconds / 60;
-    int secs = totalSeconds % 60;
+auto formatDuration(double durationInMinutes) -> std::string {
+    const int totalSeconds = static_cast<int>(std::round(durationInMinutes * Config::SECONDS_PER_MINUTE_DOUBLE));
+    const int displayMinutes = totalSeconds / Config::SECONDS_PER_MINUTE;
+    const int displaySeconds = totalSeconds % Config::SECONDS_PER_MINUTE;
 
-    ostringstream oss;
-    oss << mins << ":" << setw(2) << setfill('0') << secs;
-    return oss.str();
+    std::ostringstream outputStream;
+    outputStream << displayMinutes << ":" << std::setw(2) << std::setfill('0') << displaySeconds;
+    return outputStream.str();
 }
 
-// Базовый класс: Музыкальное произведение
 class MusicalWork {
 protected:
-    string title;
-    double duration; // Дробное число
+    std::string title;
+    double duration;
+
+private:
+    [[nodiscard]] auto matchesDuration(const std::string& operation, const std::string& targetValue) const -> bool {
+        double target = 0.0;
+        if (!parseDuration(targetValue, target)) {
+            return false;
+        }
+        const double currentDuration = getDuration();
+        if (operation == "==") { return std::abs(currentDuration - target) < Config::TIME_EPSILON; }
+        if (operation == "!=") { return std::abs(currentDuration - target) >= Config::TIME_EPSILON; }
+        if (operation == ">")  { return currentDuration > target; }
+        if (operation == "<")  { return currentDuration < target; }
+        if (operation == ">=") { return currentDuration >= target; }
+        if (operation == "<=") { return currentDuration <= target; }
+        return false;
+    }
+
+    [[nodiscard]] static auto matchesString(std::string_view actualValue, const std::string& operation, std::string_view expectedValue) -> bool {
+        const std::string actualLower = toLower(actualValue);
+        const std::string expectedLower = toLower(expectedValue);
+        if (operation == "==") { return actualLower == expectedLower; }
+        if (operation == "!=") { return actualLower != expectedLower; }
+        return false;
+    }
 
 public:
-    MusicalWork(string t, double d)
-        : title(move(t)), duration(d) {}
+    MusicalWork(std::string trackTitle, double trackDuration)
+        : title(std::move(trackTitle)), duration(trackDuration) {}
 
     virtual ~MusicalWork() = default;
 
-    const string& getTitle() const { return title; }
-    double getDuration() const { return duration; }
+    [[nodiscard]] auto getTitle() const -> const std::string& { return title; }
+    [[nodiscard]] auto getDuration() const -> double { return duration; }
 
-    virtual string getType() const = 0;
-    virtual void print(ostream& os) const = 0;
+    [[nodiscard]] virtual auto getType() const -> std::string = 0;
+    virtual auto print(std::ostream& outputStream) const -> void = 0;
 
-    virtual bool matches(const string& field, const string& op, const string& val) const {
-        string f = toLower(field);
+    [[nodiscard]] virtual auto matches(const std::string& fieldName, const std::string& operation, const std::string& filterValue) const -> bool {
+        const std::string fieldLower = toLower(fieldName);
 
-        if (f == "duration") {
-            double target = 0.0;
-            if (parseDuration(val, target)) {
-                if (op == "==") return abs(duration - target) < (1.0 / 60.0); // точность до 1 секунды
-                if (op == "!=") return abs(duration - target) >= (1.0 / 60.0);
-                if (op == ">")  return duration > target;
-                if (op == "<")  return duration < target;
-                if (op == ">=") return duration >= target;
-                if (op == "<=") return duration <= target;
-            }
-            return false;
-        } else if (f == "title") {
-            string tLower = toLower(title);
-            string vLower = toLower(val);
-            if (op == "==") return tLower == vLower;
-            if (op == "!=") return tLower != vLower;
-        } else if (f == "type") {
-            string typeLower = toLower(getType());
-            string vLower = toLower(val);
-            if (op == "==") return typeLower == vLower;
-            if (op == "!=") return typeLower != vLower;
+        if (fieldLower == "duration") {
+            return matchesDuration(operation, filterValue);
         }
-
+        if (fieldLower == "title") {
+            return matchesString(getTitle(), operation, filterValue);
+        }
+        if (fieldLower == "type") {
+            return matchesString(getType(), operation, filterValue);
+        }
         return false;
     }
 };
 
-// Класс-наследник: Песня
 class Song : public MusicalWork {
 private:
-    string artist;
+    std::string artist;
 
 public:
-    Song(string t, double d, string a)
-        : MusicalWork(move(t), d), artist(move(a)) {}
+    Song(std::string trackTitle, double trackDuration, std::string artistName)
+        : MusicalWork(std::move(trackTitle), trackDuration), artist(std::move(artistName)) {}
 
-    string getType() const override { return "Song"; }
+    [[nodiscard]] auto getType() const -> std::string override { return "Song"; }
 
-    void print(ostream& os) const override {
-        os << left << setw(12) << "[Песня]"
-           << " | Название: " << setw(24) << ("\"" + title + "\"")
-           << " | Длительность: " << setw(6) << formatDuration(duration)
-           << " (" << fixed << setprecision(2) << duration << " мин.)"
-           << " | Исполнитель: " << artist;
+    auto print(std::ostream& outputStream) const -> void override {
+        outputStream << std::left << std::setw(Config::COLUMN_TYPE_WIDTH) << "[Песня]"
+                     << " | Название: " << std::setw(Config::COLUMN_TITLE_WIDTH) << ("\"" + title + "\"")
+                     << " | Длительность: " << std::setw(Config::COLUMN_TIME_WIDTH) << formatDuration(duration)
+                     << " (" << std::fixed << std::setprecision(2) << duration << " мин.)"
+                     << " | Исполнитель: " << artist;
     }
 
-    bool matches(const string& field, const string& op, const string& val) const override {
-        if (MusicalWork::matches(field, op, val)) return true;
+    [[nodiscard]] auto matches(const std::string& fieldName, const std::string& operation, const std::string& filterValue) const -> bool override {
+        if (MusicalWork::matches(fieldName, operation, filterValue)) {
+            return true;
+        }
 
-        string f = toLower(field);
-        if (f == "artist" || f == "performer") {
-            string aLower = toLower(artist);
-            string vLower = toLower(val);
-            if (op == "==") return aLower == vLower;
-            if (op == "!=") return aLower != vLower;
+        const std::string loweredField = toLower(fieldName);
+        if (loweredField == "artist" || loweredField == "performer") {
+            const std::string loweredArtist = toLower(artist);
+            const std::string loweredTarget = toLower(filterValue);
+            if (operation == "==") { return loweredArtist == loweredTarget; }
+            if (operation == "!=") { return loweredArtist != loweredTarget; }
         }
         return false;
     }
 };
 
-// Класс-наследник: Симфония
 class Symphony : public MusicalWork {
 private:
-    string composer;
+    std::string composer;
 
 public:
-    Symphony(string t, double d, string c)
-        : MusicalWork(move(t), d), composer(move(c)) {}
+    Symphony(std::string trackTitle, double trackDuration, std::string composerName)
+        : MusicalWork(std::move(trackTitle), trackDuration), composer(std::move(composerName)) {}
 
-    string getType() const override { return "Symphony"; }
+    [[nodiscard]] auto getType() const -> std::string override { return "Symphony"; }
 
-    void print(ostream& os) const override {
-        os << left << setw(12) << "[Симфония]"
-           << " | Название: " << setw(24) << ("\"" + title + "\"")
-           << " | Длительность: " << setw(6) << formatDuration(duration)
-           << " (" << fixed << setprecision(2) << duration << " мин.)"
-           << " | Композитор:  " << composer;
+    auto print(std::ostream& outputStream) const -> void override {
+        outputStream << std::left << std::setw(Config::COLUMN_TYPE_WIDTH) << "[Симфония]"
+                     << " | Название: " << std::setw(Config::COLUMN_TITLE_WIDTH) << ("\"" + title + "\"")
+                     << " | Длительность: " << std::setw(Config::COLUMN_TIME_WIDTH) << formatDuration(duration)
+                     << " (" << std::fixed << std::setprecision(2) << duration << " мин.)"
+                     << " | Композитор:  " << composer;
     }
 
-    bool matches(const string& field, const string& op, const string& val) const override {
-        if (MusicalWork::matches(field, op, val)) return true;
+    [[nodiscard]] auto matches(const std::string& fieldName, const std::string& operation, const std::string& filterValue) const -> bool override {
+        if (MusicalWork::matches(fieldName, operation, filterValue)) {
+            return true;
+        }
 
-        string f = toLower(field);
-        if (f == "composer") {
-            string cLower = toLower(composer);
-            string vLower = toLower(val);
-            if (op == "==") return cLower == vLower;
-            if (op == "!=") return cLower != vLower;
+        const std::string loweredField = toLower(fieldName);
+        if (loweredField == "composer") {
+            const std::string loweredComposer = toLower(composer);
+            const std::string loweredTarget = toLower(filterValue);
+            if (operation == "==") { return loweredComposer == loweredTarget; }
+            if (operation == "!=") { return loweredComposer != loweredTarget; }
         }
         return false;
     }
 };
 
-// Контейнер и обработчик команд
 class WorkCatalog {
 private:
-    vector<unique_ptr<MusicalWork>> works;
+    std::vector<std::unique_ptr<MusicalWork>> works;
 
 public:
-    void add(unique_ptr<MusicalWork> work) {
-        works.push_back(move(work));
+    auto add(std::unique_ptr<MusicalWork> work) -> void {
+        works.push_back(std::move(work));
     }
 
-    size_t removeMatching(const string& field, const string& op, const string& val) {
-        size_t initialSize = works.size();
+    auto removeMatching(const std::string& fieldName, const std::string& operation, const std::string& filterValue) -> size_t {
+        const size_t initialSize = works.size();
         works.erase(
-            remove_if(works.begin(), works.end(), [&](const unique_ptr<MusicalWork>& item) {
-                return item->matches(field, op, val);
+            std::remove_if(works.begin(), works.end(), [&](const std::unique_ptr<MusicalWork>& item) -> bool {
+                return item->matches(fieldName, operation, filterValue);
             }),
             works.end()
         );
         return initialSize - works.size();
     }
 
-    void print(ostream& os) const {
-        os << "\n================ ТЕКУЩЕЕ СОДЕРЖИМОЕ КАТАЛОГА ================\n";
+    auto print(std::ostream& outputStream) const -> void {
+        outputStream << "\n================ ТЕКУЩЕЕ СОДЕРЖИМОЕ КАТАЛОГА ================\n";
         if (works.empty()) {
-            os << "  (Каталог пуст)\n";
+            outputStream << "  (Каталог пуст)\n";
         } else {
-            for (size_t i = 0; i < works.size(); ++i) {
-                os << right << setw(2) << (i + 1) << ". ";
-                works[i]->print(os);
-                os << "\n";
+            for (size_t index = 0; index < works.size(); ++index) {
+                outputStream << std::right << std::setw(2) << (index + 1) << ". ";
+                works[index]->print(outputStream);
+                outputStream << "\n";
             }
         }
-        os << "Всего объектов в каталоге: " << works.size() << "\n";
-        os << "============================================================\n\n";
+        outputStream << "Всего объектов в каталоге: " << works.size() << "\n";
+        outputStream << "============================================================\n\n";
     }
 
-    void processCommandFile(const string& filepath) {
-        ifstream file(filepath);
+    auto processCommandFile(const std::string& filepath) -> void {
+        std::ifstream file(filepath);
         if (!file.is_open()) {
-            cerr << "Ошибка: не удалось открыть файл " << filepath << "\n";
+            std::cerr << "Ошибка: не удалось открыть файл " << filepath << "\n";
             return;
         }
 
-        string line;
-        int lineNum = 0;
+        std::string currentLine;
+        int lineNumber = 0;
 
-        while (getline(file, line)) {
-            lineNum++;
-            if (line.empty() || line[0] == '#') continue;
+        while (std::getline(file, currentLine)) {
+            lineNumber++;
+            if (currentLine.empty() || currentLine[0] == '#') {
+                continue;
+            }
 
-            istringstream iss(line);
-            string command;
-            iss >> command;
+            std::istringstream lineStream(currentLine);
+            std::string commandName;
+            lineStream >> commandName;
 
-            if (command == "ADD") {
-                string kind, title, durationStr, person;
-                iss >> kind >> quoted(title) >> durationStr >> quoted(person);
+            if (commandName == "ADD") {
+                std::string kind;
+                std::string trackTitle;
+                std::string durationStr;
+                std::string personName;
+
+                lineStream >> kind >> std::quoted(trackTitle) >> durationStr >> std::quoted(personName);
 
                 double durationMinutes = 0.0;
                 if (!parseDuration(durationStr, durationMinutes)) {
-                    cerr << "Строка " << lineNum << ": некорректный формат длительности '" 
+                    std::cerr << "Строка " << lineNumber << ": ошибка формата длительности '" 
                               << durationStr << "' (секунды должны быть от 0 до 59)\n";
                     continue;
                 }
 
-                if (toLower(kind) == "song") {
-                    add(make_unique<Song>(title, durationMinutes, person));
-                    cout << "[ADD] Добавлена песня: \"" << title << "\" (" << formatDuration(durationMinutes) << ")\n";
-                } else if (toLower(kind) == "symphony") {
-                    add(make_unique<Symphony>(title, durationMinutes, person));
-                    cout << "[ADD] Добавлена симфония: \"" << title << "\" (" << formatDuration(durationMinutes) << ")\n";
+                const std::string kindLower = toLower(kind);
+                if (kindLower == "song") {
+                    add(std::make_unique<Song>(trackTitle, durationMinutes, personName));
+                    std::cout << "[ADD] Добавлена песня: \"" << trackTitle << "\" (" << formatDuration(durationMinutes) << ")\n";
+                } else if (kindLower == "symphony") {
+                    add(std::make_unique<Symphony>(trackTitle, durationMinutes, personName));
+                    std::cout << "[ADD] Добавлена симфония: \"" << trackTitle << "\" (" << formatDuration(durationMinutes) << ")\n";
                 } else {
-                    cerr << "Строка " << lineNum << ": неизвестный тип: " << kind << "\n";
+                    std::cerr << "Строка " << lineNumber << ": неизвестный тип: " << kind << "\n";
                 }
-            } else if (command == "REM") {
-                string field, op, val;
-                iss >> field >> op >> quoted(val);
+            } else if (commandName == "REM") {
+                std::string fieldName;
+                std::string operation;
+                std::string filterValue;
 
-                size_t removed = removeMatching(field, op, val);
-                cout << "[REM] Удалено по условию (" << field << " " << op << " \"" << val << "\"): " 
-                          << removed << " шт.\n";
-            } else if (command == "PRINT") {
-                print(cout);
+                lineStream >> fieldName >> operation >> std::quoted(filterValue);
+
+                const size_t removedCount = removeMatching(fieldName, operation, filterValue);
+                std::cout << "[REM] Удалено по условию (" << fieldName << " " << operation << " \"" << filterValue << "\"): " 
+                          << removedCount << " шт.\n";
+            } else if (commandName == "PRINT") {
+                print(std::cout);
             } else {
-                cerr << "Строка " << lineNum << ": неизвестная команда: " << command << "\n";
+                std::cerr << "Строка " << lineNumber << ": неизвестная команда: " << commandName << "\n";
             }
         }
     }
 };
 
-int main() {
+auto main() -> int {
 #ifdef _WIN32
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
     WorkCatalog catalog;
-    const string filename = "commands.txt";
+    const std::string inputFilename = "commands.txt";
 
-    cout << "Запуск обработки команд из файла '" << filename << "'...\n";
-    catalog.processCommandFile(filename);
+    std::cout << "Запуск обработки команд из файла '" << inputFilename << "'...\n";
+    catalog.processCommandFile(inputFilename);
 
     return 0;
 }
